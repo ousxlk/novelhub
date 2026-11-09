@@ -1,116 +1,113 @@
 import { useEffect, useRef, useState } from "react";
-import { Puzzle, Plus, Download, Upload, Trash2, ExternalLink, Globe2, FileJson, CheckCircle2, ChevronDown, Copy } from "lucide-react";
+import { Puzzle, Plus, Download, Upload, Trash2, Globe2, FileJson, CheckCircle2, ChevronDown, Search, ChevronLeft, BookOpen, Loader2, RefreshCw, X, ExternalLink } from "lucide-react";
 
 export type NovelSourceExtension = {
-  manifestVersion: 1;
-  id: string;
-  name: string;
-  version: string;
-  language: string;
-  description: string;
-  icon: string;
-  baseUrl: string;
-  searchUrl: string;
-  selectors: {
-    novelList: string;
-    novelTitle: string;
-    novelLink: string;
-    novelAuthor: string;
-    novelDescription: string;
-    chapterList: string;
-    chapterTitle: string;
-    chapterLink: string;
-    chapterContent: string;
-  };
+  manifestVersion: 1; id: string; name: string; version: string; language: string;
+  description: string; icon: string; baseUrl: string; searchUrl: string;
+  selectors: { novelList:string; novelTitle:string; novelLink:string; novelAuthor:string; novelDescription:string; chapterList:string; chapterTitle:string; chapterLink:string; chapterContent:string };
 };
+type NovelItem = { title:string; url:string; author:string; description:string };
+type ChapterItem = { title:string; url:string };
+type ReadChapter = { title:string; text:string; url:string };
+declare global { interface Window { novelHub?: { fetchPage:(url:string)=>Promise<{ok:boolean;status:number;html:string}> } } }
 
 const emptyForm = {
-  name: "", version: "1.0.0", language: "English", description: "",
-  icon: "📚", baseUrl: "https://", searchUrl: "",
-  novelList: ".novel-item", novelTitle: "h3", novelLink: "a",
-  novelAuthor: ".author", novelDescription: ".description",
-  chapterList: ".chapter-item", chapterTitle: "a", chapterLink: "a",
-  chapterContent: ".chapter-content"
+  name:"", version:"1.0.0", language:"English", description:"", icon:"📚", baseUrl:"https://", searchUrl:"",
+  novelList:".novel-item", novelTitle:"h3", novelLink:"a", novelAuthor:".author", novelDescription:".description",
+  chapterList:".chapter-item", chapterTitle:"a", chapterLink:"a", chapterContent:".chapter-content"
 };
-const languages = ["English","Arabic","French","Spanish","German","Japanese","Korean","Chinese","Portuguese","Other"];
-const validUrl = (value: string) => { try { const u = new URL(value); return u.protocol === "https:" || u.protocol === "http:"; } catch { return false; } };
-const safeId = (value: string) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g,".").replace(/^\.|\.$/g,"") || "my.novel.source";
-
-export default function ExtensionStudio() {
-  const [form,setForm] = useState(emptyForm);
-  const [sources,setSources] = useState<NovelSourceExtension[]>([]);
-  const [message,setMessage] = useState("");
-  const [showAdvanced,setShowAdvanced] = useState(false);
-  const importRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    try { const raw=localStorage.getItem("novelhub.sourceExtensions"); if(raw) setSources(JSON.parse(raw)); } catch { setSources([]); }
-  },[]);
-  const persist = (next: NovelSourceExtension[]) => { setSources(next); localStorage.setItem("novelhub.sourceExtensions",JSON.stringify(next)); };
-  const update = (key: keyof typeof emptyForm, value: string) => setForm(old=>({...old,[key]:value}));
-  const makeManifest = (): NovelSourceExtension => ({
-    manifestVersion:1, id:safeId(form.name), name:form.name.trim(), version:form.version.trim()||"1.0.0",
-    language:form.language, description:form.description.trim(), icon:form.icon.trim()||"📚",
-    baseUrl:form.baseUrl.trim(), searchUrl:form.searchUrl.trim(),
-    selectors:{novelList:form.novelList.trim(),novelTitle:form.novelTitle.trim(),novelLink:form.novelLink.trim(),novelAuthor:form.novelAuthor.trim(),novelDescription:form.novelDescription.trim(),chapterList:form.chapterList.trim(),chapterTitle:form.chapterTitle.trim(),chapterLink:form.chapterLink.trim(),chapterContent:form.chapterContent.trim()}
-  });
-  const create = () => {
-    if(!form.name.trim() || !validUrl(form.baseUrl)) { setMessage("Add a source name and a valid http(s) website URL first."); return; }
-    const item=makeManifest();
-    if(sources.some(s=>s.id===item.id)){setMessage("An extension with this ID already exists. Change the source name.");return;}
-    persist([...sources,item]); setMessage("Extension created and saved in this app."); setForm(emptyForm);
+const languages=["English","Arabic","French","Spanish","German","Japanese","Korean","Chinese","Portuguese","Other"];
+const validUrl=(v:string)=>{try{const u=new URL(v);return u.protocol==="https:"||u.protocol==="http:"}catch{return false}};
+const safeId=(v:string)=>v.toLowerCase().trim().replace(/[^a-z0-9]+/g,".").replace(/^\.|\.$/g,"")||"my.novel.source";
+const absolute=(href:string,base:string)=>{try{return new URL(href,base).href}catch{return ""}};
+const textOf=(el:Element|null)=>el?.textContent?.replace(/\s+/g," ").trim()||"";
+function selectAll(root:ParentNode, selector:string):Element[]{try{return selector?Array.from(root.querySelectorAll(selector)):[]}catch{return []}}
+function selectOne(root:ParentNode, selector:string):Element|null{try{return selector?root.querySelector(selector):null}catch{return null}}
+async function fetchHtml(url:string):Promise<string>{
+  if(!validUrl(url)) throw new Error("This source produced an invalid page URL.");
+  if(window.novelHub?.fetchPage){const r=await window.novelHub.fetchPage(url);if(!r.ok)throw new Error("The source returned HTTP "+r.status+".");return r.html;}
+  const response=await fetch(url);if(!response.ok)throw new Error("The source returned HTTP "+response.status+".");
+  return await response.text();
+}
+function parseNovels(html:string,source:NovelSourceExtension,base:string):NovelItem[]{
+  const doc=new DOMParser().parseFromString(html,"text/html");
+  return selectAll(doc,source.selectors.novelList).map((node)=> {
+    const link=selectOne(node,source.selectors.novelLink) as HTMLAnchorElement|null;
+    const title=textOf(selectOne(node,source.selectors.novelTitle))||textOf(link)||textOf(node);
+    const url=absolute(link?.getAttribute("href")||"",base);
+    return {title,url,author:textOf(selectOne(node,source.selectors.novelAuthor)),description:textOf(selectOne(node,source.selectors.novelDescription))};
+  }).filter(n=>n.title&&n.url);
+}
+function parseChapters(html:string,source:NovelSourceExtension,base:string):ChapterItem[]{
+  const doc=new DOMParser().parseFromString(html,"text/html");
+  return selectAll(doc,source.selectors.chapterList).map(node=>{
+    const link=selectOne(node,source.selectors.chapterLink) as HTMLAnchorElement|null;
+    const title=textOf(selectOne(node,source.selectors.chapterTitle))||textOf(link)||textOf(node);
+    return {title,url:absolute(link?.getAttribute("href")||"",base)};
+  }).filter(c=>c.title&&c.url);
+}
+function parseChapter(html:string,source:NovelSourceExtension):string{
+  const doc=new DOMParser().parseFromString(html,"text/html");
+  const root=selectOne(doc,source.selectors.chapterContent)||doc.querySelector("article")||doc.querySelector("main")||doc.body;
+  root?.querySelectorAll("script,style,nav,header,footer,button,form,iframe").forEach(el=>el.remove());
+  return (root?.textContent||"").replace(/\r/g,"").replace(/[ \t]+\n/g,"\n").replace(/\n{3,}/g,"\n\n").trim();
+}
+function saveText(filename:string,content:string){
+  const blob=new Blob(["\uFEFF"+content],{type:"text/plain;charset=utf-8"});
+  const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+export default function ExtensionStudio(){
+  const [form,setForm]=useState(emptyForm);
+  const [sources,setSources]=useState<NovelSourceExtension[]>([]);
+  const [message,setMessage]=useState("");
+  const [showAdvanced,setShowAdvanced]=useState(false);
+  const [selected,setSelected]=useState<NovelSourceExtension|null>(null);
+  const [novels,setNovels]=useState<NovelItem[]>([]);
+  const [chapters,setChapters]=useState<ChapterItem[]>([]);
+  const [selectedNovel,setSelectedNovel]=useState<NovelItem|null>(null);
+  const [reading,setReading]=useState<ReadChapter|null>(null);
+  const [loading,setLoading]=useState(false);
+  const [search,setSearch]=useState("");
+  const [error,setError]=useState("");
+  const [bulkProgress,setBulkProgress]=useState("");
+  const importRef=useRef<HTMLInputElement>(null);
+  useEffect(()=>{try{const raw=localStorage.getItem("novelhub.sourceExtensions");if(raw)setSources(JSON.parse(raw))}catch{setSources([])}},[]);
+  const persist=(next:NovelSourceExtension[])=>{setSources(next);localStorage.setItem("novelhub.sourceExtensions",JSON.stringify(next))};
+  const update=(key:keyof typeof emptyForm,value:string)=>setForm(old=>({...old,[key]:value}));
+  const makeManifest=():NovelSourceExtension=>({manifestVersion:1,id:safeId(form.name),name:form.name.trim(),version:form.version.trim()||"1.0.0",language:form.language,description:form.description.trim(),icon:form.icon.trim()||"📚",baseUrl:form.baseUrl.trim(),searchUrl:form.searchUrl.trim(),selectors:{novelList:form.novelList.trim(),novelTitle:form.novelTitle.trim(),novelLink:form.novelLink.trim(),novelAuthor:form.novelAuthor.trim(),novelDescription:form.novelDescription.trim(),chapterList:form.chapterList.trim(),chapterTitle:form.chapterTitle.trim(),chapterLink:form.chapterLink.trim(),chapterContent:form.chapterContent.trim()}});
+  const create=()=>{if(!form.name.trim()||!validUrl(form.baseUrl)){setMessage("Enter a source name and a valid http(s) website URL.");return}const item=makeManifest();if(sources.some(s=>s.id===item.id)){setMessage("That source ID already exists. Change its name.");return}persist([...sources,item]);setMessage("Source added. Select it below to browse its novels.");setForm(emptyForm)};
+  const downloadManifest=(item:NovelSourceExtension)=>saveText(item.id+".novelhub.json",JSON.stringify(item,null,2));
+  const importFile=async(file?:File)=>{if(!file)return;try{const data=JSON.parse(await file.text()) as NovelSourceExtension;if(data.manifestVersion!==1||!data.name||!data.id||!validUrl(data.baseUrl)||!data.selectors)throw new Error("This is not a valid Novel Hub source manifest.");persist([...sources.filter(s=>s.id!==data.id),data]);setMessage("Source imported. Select it below to browse.");}catch(e){setMessage(e instanceof Error?e.message:"Could not import this file.")}if(importRef.current)importRef.current.value=""};
+  const loadNovels=async(source:NovelSourceExtension,term="")=>{
+    setSelected(source);setSelectedNovel(null);setReading(null);setChapters([]);setNovels([]);setError("");setLoading(true);
+    try{let url=source.baseUrl;if(term.trim()&&source.searchUrl){url=source.searchUrl.replaceAll("{query}",encodeURIComponent(term.trim())).replaceAll("{search}",encodeURIComponent(term.trim()));url=absolute(url,source.baseUrl)}const html=await fetchHtml(url);const items=parseNovels(html,source,url);setNovels(items);if(!items.length)setError("No novels matched the configured novel-card selector. Open Page selectors and adjust the CSS selectors to match this website.");}
+    catch(e){setError(e instanceof Error?e.message:"Could not load this source.");}finally{setLoading(false)}
   };
-  const download = (item: NovelSourceExtension) => {
-    const blob=new Blob([JSON.stringify(item,null,2)],{type:"application/json"});
-    const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=item.id+".novelhub.json"; a.click(); URL.revokeObjectURL(url);
+  const openNovel=async(novel:NovelItem)=>{
+    if(!selected)return;setSelectedNovel(novel);setReading(null);setChapters([]);setError("");setLoading(true);
+    try{const html=await fetchHtml(novel.url);const items=parseChapters(html,selected,novel.url);setChapters(items);if(!items.length)setError("No chapters found. Adjust the chapter row, title and link selectors in this source's settings.");}
+    catch(e){setError(e instanceof Error?e.message:"Could not load chapters.");}finally{setLoading(false)}
   };
-  const importFile = async (file?: File) => {
-    if(!file) return;
-    try {
-      const data=JSON.parse(await file.text()) as NovelSourceExtension;
-      if(data.manifestVersion!==1 || !data.name || !data.id || !validUrl(data.baseUrl) || !data.selectors) throw new Error("This file is not a valid Novel Hub source manifest.");
-      const next=[...sources.filter(s=>s.id!==data.id),data]; persist(next); setMessage("Extension imported successfully.");
-    } catch(e) { setMessage(e instanceof Error?e.message:"Could not import this file."); }
-    if(importRef.current) importRef.current.value="";
+  const openChapter=async(ch:ChapterItem)=>{
+    if(!selected)return;setLoading(true);setError("");
+    try{const html=await fetchHtml(ch.url);const body=parseChapter(html,selected);if(!body)throw new Error("The chapter page was empty. Check the Chapter content selector.");setReading({title:ch.title,text:body,url:ch.url});}
+    catch(e){setError(e instanceof Error?e.message:"Could not load chapter.");}finally{setLoading(false)}
   };
-  const field = (label:string,key:keyof typeof emptyForm,placeholder:string) => <label className="extension-field"><span>{label}</span><input value={form[key]} onChange={e=>update(key,e.target.value)} placeholder={placeholder}/></label>;
+  const downloadOne=(ch:ChapterItem)=>{if(!selectedNovel)return;void (async()=>{setBulkProgress("Preparing "+ch.title+"…");try{const html=await fetchHtml(ch.url);const body=parseChapter(html,selected!);saveText((selectedNovel.title+" - "+ch.title).replace(/[\\/:*?"<>|]/g,"-")+".txt",ch.title+"\n\n"+body);setBulkProgress("")}catch(e){setError(e instanceof Error?e.message:"Download failed.");setBulkProgress("")}})()};
+  const downloadAll=async()=>{
+    if(!selectedNovel||!selected||!chapters.length)return;setLoading(true);setError("");const collected:string[]=[];
+    try{for(let i=0;i<chapters.length;i++){setBulkProgress("Downloading "+(i+1)+" / "+chapters.length);const html=await fetchHtml(chapters[i].url);collected.push(chapters[i].title+"\n\n"+parseChapter(html,selected));}saveText((selectedNovel.title).replace(/[\\/:*?"<>|]/g,"-")+".txt",selectedNovel.title+"\n\n"+collected.join("\n\n"+"—".repeat(30)+"\n\n"));setBulkProgress("All chapters downloaded.");}
+    catch(e){setError(e instanceof Error?e.message:"Could not download all chapters.");}finally{setLoading(false)}
+  };
+  const field=(label:string,key:keyof typeof emptyForm,placeholder:string)=><label className="extension-field"><span>{label}</span><input value={form[key]} onChange={e=>update(key,e.target.value)} placeholder={placeholder}/></label>;
+  const visibleNovels=novels.filter(n=>(n.title+" "+n.author+" "+n.description).toLowerCase().includes(search.toLowerCase()));
   return <section className="extension-studio">
-    <div className="extension-heading"><div><span className="eyebrow"><Puzzle size={14}/> BUILD YOUR OWN SOURCES</span><h1>Extension Studio</h1><p>Create a source profile for a web-novel website. No programming required.</p></div><div className="extension-heading-icon"><Puzzle size={35}/></div></div>
-    <div className="extension-layout">
-      <div className="extension-builder">
-        <div className="extension-step"><span>01</span><div><strong>Source details</strong><small>Give your extension a name and website.</small></div></div>
-        <div className="extension-form-grid">
-          {field("Extension name","name","e.g. My Favorite Novels")}
-          {field("Version","version","1.0.0")}
-          <label className="extension-field"><span>Language</span><select value={form.language} onChange={e=>update("language",e.target.value)}>{languages.map(l=><option key={l}>{l}</option>)}</select></label>
-          <label className="extension-field"><span>Icon / emoji</span><input value={form.icon} onChange={e=>update("icon",e.target.value)} maxLength={8}/></label>
-          <div className="extension-field full">{field("Website URL","baseUrl","https://example.com")}</div>
-          <div className="extension-field full">{field("Search URL template (optional)","searchUrl","https://example.com/search?q={query}")}<small>Use <code>{"{query}"}</code> where the search words should go.</small></div>
-          <div className="extension-field full">{field("Short description","description","What kind of novels does this source provide?")}</div>
-        </div>
-        <button className="extension-advanced-toggle" onClick={()=>setShowAdvanced(!showAdvanced)}><span>02 · Page selectors (advanced)</span><ChevronDown size={16} className={showAdvanced?"rotated":""}/></button>
-        {showAdvanced&&<><p className="extension-help">These are CSS selectors that describe where the website keeps its novel titles, links, chapter list, and chapter text. You can leave the defaults and edit them later.</p><div className="extension-form-grid selector-grid">
-          {field("Novel card selector","novelList",".novel-item")}
-          {field("Novel title selector","novelTitle","h3")}
-          {field("Novel link selector","novelLink","a")}
-          {field("Author selector","novelAuthor",".author")}
-          {field("Description selector","novelDescription",".description")}
-          {field("Chapter row selector","chapterList",".chapter-item")}
-          {field("Chapter title selector","chapterTitle","a")}
-          {field("Chapter link selector","chapterLink","a")}
-          {field("Chapter text selector","chapterContent",".chapter-content")}
-        </div></>}
-        <div className="extension-form-footer"><span><Globe2 size={14}/> Manifest format · Novel Hub v1</span><button className="primary-btn" onClick={create}><Plus size={16}/> Create extension</button></div>
-        {message&&<div className="extension-message"><CheckCircle2 size={15}/>{message}</div>}
-      </div>
-      <aside className="extension-side">
-        <div className="extension-tip"><FileJson size={21}/><strong>What is an extension?</strong><p>A small source profile that describes a novel website, its language, search pattern, and page structure.</p></div>
-        <div className="extension-tip"><Download size={21}/><strong>Export & share</strong><p>Download a <code>.novelhub.json</code> manifest to back it up or share it with another Novel Hub user.</p></div>
-        <button className="secondary-btn import-extension" onClick={()=>importRef.current?.click()}><Upload size={16}/> Import extension file</button>
-        <input ref={importRef} type="file" accept=".json,.novelhub.json,application/json" hidden onChange={e=>void importFile(e.target.files?.[0])}/>
-      </aside>
-    </div>
-    <div className="installed-extensions"><div className="section-heading"><div><span className="eyebrow">YOUR SOURCE COLLECTION</span><h2>My extensions</h2></div><span className="result-count">{sources.length} INSTALLED</span></div>
-      {sources.length===0?<div className="extension-empty"><Puzzle size={25}/><strong>No extensions yet</strong><span>Create your first source above or import a manifest file.</span></div>:<div className="extension-list">{sources.map(source=><article className="extension-card" key={source.id}><div className="extension-icon">{source.icon}</div><div className="extension-card-info"><strong>{source.name}</strong><span>{source.language} · v{source.version}</span><small>{source.baseUrl}</small></div><div className="extension-card-actions"><button className="icon-btn" title="Open website" onClick={()=>window.open(source.baseUrl,"_blank","noopener,noreferrer")}><ExternalLink size={16}/></button><button className="icon-btn" title="Export manifest" onClick={()=>download(source)}><Download size={16}/></button><button className="icon-btn danger" title="Remove extension" onClick={()=>persist(sources.filter(s=>s.id!==source.id))}><Trash2 size={16}/></button></div></article>)}</div>}
-    </div>
+    <div className="extension-heading"><div><span className="eyebrow"><Puzzle size={14}/> YOUR NOVEL SOURCES</span><h1>Extensions</h1><p>Add a novel website once, then browse its novels and chapters here.</p></div><div className="extension-heading-icon"><BookOpen size={35}/></div></div>
+    {reading&&selectedNovel?<div className="source-reader"><button className="back-link" onClick={()=>setReading(null)}><ChevronLeft size={16}/> Back to chapters</button><span className="eyebrow">{selected?.name} · {selectedNovel.title}</span><h2>{reading.title}</h2><article className="source-chapter-text">{reading.text}</article><div className="source-reader-actions"><button className="secondary-btn" onClick={()=>saveText((reading.title).replace(/[\\/:*?"<>|]/g,"-")+".txt",reading.title+"\n\n"+reading.text)}><Download size={15}/> Download chapter</button><button className="secondary-btn" onClick={()=>window.open(reading.url,"_blank","noopener,noreferrer")}><ExternalLink size={15}/> Source page</button></div></div>
+    : selectedNovel ? <div className="source-browser"><button className="back-link" onClick={()=>{setSelectedNovel(null);setChapters([]);setError("")}}><ChevronLeft size={16}/> Back to {selected?.name}</button><div className="source-browser-heading"><div><span className="eyebrow">{selected?.name} · NOVEL DETAILS</span><h2>{selectedNovel.title}</h2><p>{selectedNovel.author&&"by "+selectedNovel.author}{selectedNovel.description&&" · "+selectedNovel.description}</p></div><button className="secondary-btn small" onClick={()=>downloadAll()} disabled={!chapters.length||loading}><Download size={15}/> Download all chapters</button></div><div className="source-list-heading"><strong>Chapters ({chapters.length})</strong><span>Choose a chapter to read or download</span></div>{chapters.map((ch,i)=><div className="source-chapter-row" key={ch.url+i}><button className="source-chapter-open" onClick={()=>void openChapter(ch)}><BookOpen size={16}/><span>{i+1}. {ch.title}</span></button><button className="icon-btn" title="Download chapter" onClick={()=>downloadOne(ch)}><Download size={16}/></button></div>)}</div>
+    : selected ? <div className="source-browser"><div className="source-browser-heading"><div><span className="eyebrow">{selected.language} SOURCE</span><h2>{selected.icon} {selected.name}</h2><p>{selected.description||selected.baseUrl}</p></div><div className="source-heading-actions"><button className="secondary-btn small" onClick={()=>void loadNovels(selected)} disabled={loading}><RefreshCw size={15}/> Refresh</button><button className="icon-btn" title="Close source" onClick={()=>{setSelected(null);setNovels([]);setError("")}}><X size={17}/></button></div></div><div className="source-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Filter loaded novels…"/><span>{visibleNovels.length} novels</span></div>{loading&&<div className="source-loading"><Loader2 size={22}/> Loading source…</div>}{error&&<div className="source-error">{error}</div>}<div className="source-novel-grid">{visibleNovels.map((n,i)=><button className="source-novel-card" key={n.url+i} onClick={()=>void openNovel(n)}><span className="source-novel-cover"><BookOpen size={27}/></span><strong>{n.title}</strong><small>{n.author||selected.name}</small>{n.description&&<p>{n.description}</p>}<span className="source-card-action">View chapters <ChevronLeft size={14}/></span></button>)}</div></div>
+    : <><div className="installed-extensions"><div className="section-heading"><div><span className="eyebrow">READY TO READ</span><h2>My sources</h2></div><span className="result-count">{sources.length} INSTALLED</span></div>{sources.length===0?<div className="extension-empty"><Puzzle size={25}/><strong>No sources installed yet</strong><span>Add a novel website below. Novel Hub will display its novels and chapters here.</span></div>:<div className="extension-list">{sources.map(source=><article className="extension-card" key={source.id}><div className="extension-icon">{source.icon}</div><div className="extension-card-info"><strong>{source.name}</strong><span>{source.language} · v{source.version}</span><small>{source.baseUrl}</small></div><div className="extension-card-actions"><button className="primary-btn small" onClick={()=>void loadNovels(source)}><BookOpen size={15}/> Browse novels</button><button className="icon-btn" title="Export source" onClick={()=>downloadManifest(source)}><Download size={16}/></button><button className="icon-btn danger" title="Remove source" onClick={()=>persist(sources.filter(s=>s.id!==source.id))}><Trash2 size={16}/></button></div></article>)}</div>}</div>
+    <div className="extension-layout"><div className="extension-builder"><div className="extension-step"><span>01</span><div><strong>Add a novel website</strong><small>Enter the source URL and the page selectors used by that website.</small></div></div><div className="extension-form-grid">{field("Source name","name","e.g. My Novel Site")}{field("Version","version","1.0.0")}<label className="extension-field"><span>Language</span><select value={form.language} onChange={e=>update("language",e.target.value)}>{languages.map(l=><option key={l}>{l}</option>)}</select></label><label className="extension-field"><span>Icon / emoji</span><input value={form.icon} onChange={e=>update("icon",e.target.value)} maxLength={8}/></label><div className="extension-field full">{field("Website URL","baseUrl","https://example.com")}</div><div className="extension-field full">{field("Search URL template (optional)","searchUrl","https://example.com/search?q={query}")}<small>Use <code>{"{query}"}</code> where the search phrase belongs.</small></div><div className="extension-field full">{field("Description","description","What kind of novels are on this source?")}</div></div><button className="extension-advanced-toggle" onClick={()=>setShowAdvanced(!showAdvanced)}><span>02 · Website page selectors</span><ChevronDown size={16} className={showAdvanced?"rotated":""}/></button>{showAdvanced&&<><p className="extension-help">Selectors tell Novel Hub where to find novel cards, chapter links and chapter text. Each website may use different CSS selectors. If browsing finds nothing, inspect the website and adjust these fields.</p><div className="extension-form-grid selector-grid">{field("Novel card selector","novelList",".novel-item")}{field("Novel title selector","novelTitle","h3")}{field("Novel link selector","novelLink","a")}{field("Author selector","novelAuthor",".author")}{field("Description selector","novelDescription",".description")}{field("Chapter row selector","chapterList",".chapter-item")}{field("Chapter title selector","chapterTitle","a")}{field("Chapter link selector","chapterLink","a")}{field("Chapter content selector","chapterContent",".chapter-content")}</div></>}<div className="extension-form-footer"><span><Globe2 size={14}/> Live source reader · Manifest v1</span><button className="primary-btn" onClick={create}><Plus size={16}/> Add source</button></div>{message&&<div className="extension-message"><CheckCircle2 size={15}/>{message}</div>}</div><aside className="extension-side"><div className="extension-tip"><BookOpen size={21}/><strong>Browse inside the app</strong><p>Novel Hub reads the source page, lists novels, opens chapter lists and displays chapter text in its reader.</p></div><div className="extension-tip"><FileJson size={21}/><strong>Import & export</strong><p>Back up source settings as a .novelhub.json file and import them on another device.</p></div><button className="secondary-btn import-extension" onClick={()=>importRef.current?.click()}><Upload size={16}/> Import source file</button><input ref={importRef} type="file" accept=".json,.novelhub.json,application/json" hidden onChange={e=>void importFile(e.target.files?.[0])}/></aside></div></>}
+    {loading&&selectedNovel&&<div className="source-loading"><Loader2 size={18}/> Loading…</div>}{bulkProgress&&<div className="extension-message">{bulkProgress}</div>}{error&&selectedNovel&&<div className="source-error">{error}</div>}
   </section>;
 }
