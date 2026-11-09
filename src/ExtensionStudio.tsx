@@ -94,7 +94,10 @@ function parseChapters(html:string,source:NovelSourceExtension,base:string):Chap
     const url=absolute(link.getAttribute("href")||"",base);
     const title=textOf(link)||link.getAttribute("title")||"";
     if(!url||url===base||!title||title.length>180||seenUrlIsExternalAsset(url))return;
-    if(/chapter|chap|episode|ep\.?\s*\d|volume|part\s*\d|الفصل|فصل|الحلقة|第\s*\d|卷\s*\d/i.test(title+" "+url))found.push({title,url});
+    const chapterLike=/chapter|chap|episode|ep\.?\s*\d|volume|part\s*\d|الفصل|فصل|الحلقة|第\s*\d|卷\s*\d/i.test(title+" "+url);
+    const numbered=/^(?:chapter\s*)?(?:#\s*)?\d{1,6}(?:\s*[:.-].*)?$|^第\s*\d+\s*[章节話回]/i.test(title);
+    const inChapterList=!!link.closest("ol,ul,[class*=chapter i],[id*=chapter i],[class*=episode i]");
+    if(chapterLike||(numbered&&inChapterList))found.push({title,url});
   });
   return uniqueChapters(found);
 }
