@@ -42,7 +42,7 @@ function parseNovels(html:string,source:NovelSourceExtension,base:string):NovelI
   const doc=new DOMParser().parseFromString(html,"text/html");
   const configured=selectAll(doc,source.selectors.novelList).map((node)=> {
     const link=selectOne(node,source.selectors.novelLink) as HTMLAnchorElement|null;
-    const title=textOf(selectOne(node,source.selectors.novelTitle))||textOf(link)||textOf(node);
+    const title=textOf(selectOne(node,source.selectors.novelTitle))||textOf(link)||link?.getAttribute("title")||((link?.querySelector("img") as HTMLImageElement|null)?.alt)||textOf(node);
     const url=absolute(link?.getAttribute("href")||"",base);
     return {title,url,author:textOf(selectOne(node,source.selectors.novelAuthor)),description:textOf(selectOne(node,source.selectors.novelDescription)),cover:posterOf(node,base)};
   }).filter(n=>n.title&&n.url);
@@ -52,7 +52,7 @@ function parseNovels(html:string,source:NovelSourceExtension,base:string):NovelI
   const candidates:Array<NovelItem & {score:number}>=[];
   doc.querySelectorAll("a[href]").forEach(anchor=>{
     const link=anchor as HTMLAnchorElement;
-    const title=textOf(anchor);
+    const title=textOf(anchor)||link.getAttribute("title")||((anchor.querySelector("img") as HTMLImageElement|null)?.alt)||"";
     const url=absolute(link.getAttribute("href")||"",base);
     if(!title||title.length<2||title.length>180||!url||seen.has(url))return;
     if(/^(home|login|register|sign in|sign up|next|previous|read more|search|menu)$/i.test(title))return;
