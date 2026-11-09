@@ -31,12 +31,37 @@ async function fetchHtml(url:string):Promise<string>{
 }
 function parseNovels(html:string,source:NovelSourceExtension,base:string):NovelItem[]{
   const doc=new DOMParser().parseFromString(html,"text/html");
-  return selectAll(doc,source.selectors.novelList).map((node)=> {
+  const configured=selectAll(doc,source.selectors.novelList).map((node)=> {
     const link=selectOne(node,source.selectors.novelLink) as HTMLAnchorElement|null;
     const title=textOf(selectOne(node,source.selectors.novelTitle))||textOf(link)||textOf(node);
     const url=absolute(link?.getAttribute("href")||"",base);
     return {title,url,author:textOf(selectOne(node,source.selectors.novelAuthor)),description:textOf(selectOne(node,source.selectors.novelDescription))};
   }).filter(n=>n.title&&n.url);
+  if(configured.length)return configured;
+  // Fallback discovery for websites without a predictable novel-card class.
+  const seen=new Set<string>();
+  const candidates:Array<NovelItem & {score:number}>=[];
+  doc.querySelectorAll("a[href]").forEach(anchor=>{
+    const link=anchor as HTMLAnchorElement;
+    const title=textOf(anchor);
+    const url=absolute(link.getAttribute("href")||"",base);
+    if(!title||title.length<2||title.length>180||!url||seen.has(url))return;
+    if(/^(home|login|register|sign in|sign up|next|previous|read more|search|menu)$/i.test(title))return;
+    if(url===base||url.startsWith("javascript:")||url.startsWith("mailto:"))return;
+    let parent:Element|null=anchor;
+    for(let depth=0;depth<5&&parent;depth++){
+      if(parent.matches("article,li,[class*=book i],[class*=novel i],[class*=item i],[class*=card i]"))break;
+      parent=parent.parentElement;
+    }
+    const container=parent||anchor.parentElement||anchor;
+    const context=textOf(container);
+    if(context.length>650)return;
+    const classHint=(container.getAttribute("class")||"").toLowerCase();
+    const score=(/novel|book|manga|story|card|item/.test(classHint)?5:0)+(container.matches("article,li")?2:0)+(title.length>=4?1:0)+(context.length>=title.length?1:0);
+    seen.add(url);
+    candidates.push({title,url,author:"",description:"",score});
+  });
+  return candidates.filter(item=>item.score>=2).sort((a,b)=>b.score-a.score).slice(0,100).map(({score,...item})=>item);
 }
 function parseChapters(html:string,source:NovelSourceExtension,base:string):ChapterItem[]{
   const doc=new DOMParser().parseFromString(html,"text/html");
@@ -80,7 +105,7 @@ export default function ExtensionStudio(){
   const importFile=async(file?:File)=>{if(!file)return;try{const data=JSON.parse(await file.text()) as NovelSourceExtension;if(data.manifestVersion!==1||!data.name||!data.id||!validUrl(data.baseUrl)||!data.selectors)throw new Error("This is not a valid Novel Hub source manifest.");persist([...sources.filter(s=>s.id!==data.id),data]);setMessage("Source imported. Select it below to browse.");}catch(e){setMessage(e instanceof Error?e.message:"Could not import this file.")}if(importRef.current)importRef.current.value=""};
   const loadNovels=async(source:NovelSourceExtension,term="")=>{
     setSelected(source);setSelectedNovel(null);setReading(null);setChapters([]);setNovels([]);setError("");setLoading(true);
-    try{let url=source.baseUrl;if(term.trim()&&source.searchUrl){url=source.searchUrl.replaceAll("{query}",encodeURIComponent(term.trim())).replaceAll("{search}",encodeURIComponent(term.trim()));url=absolute(url,source.baseUrl)}const html=await fetchHtml(url);const items=parseNovels(html,source,url);setNovels(items);if(!items.length)setError("No novels matched the configured novel-card selector. Open Page selectors and adjust the CSS selectors to match this website.");}
+    try{let url=source.baseUrl;if(term.trim()&&source.searchUrl){url=source.searchUrl.replaceAll("{query}",encodeURIComponent(term.trim())).replaceAll("{search}",encodeURIComponent(term.trim()));url=absolute(url,source.baseUrl)}const html=await fetchHtml(url);const items=parseNovels(html,source,url);setNovels(items);if(!items.length)setError("Novel Hub could not identify novel links on this page. Try opening the website’s catalogue or search page (not just its homepage). If the site loads its list with JavaScript or blocks automated requests, automatic detection may not work; configure the novel-card, title and link selectors in Page selectors.");}
     catch(e){setError(e instanceof Error?e.message:"Could not load this source.");}finally{setLoading(false)}
   };
   const openNovel=async(novel:NovelItem)=>{
