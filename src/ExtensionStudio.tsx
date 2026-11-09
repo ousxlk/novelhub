@@ -142,7 +142,8 @@ function parseChapter(html:string,source:NovelSourceExtension,base:string):{text
     if(["script","style","nav","header","footer","button","form","iframe","aside","svg","noscript"].includes(tag))return "";
     if(tag==="img"){
       const raw=el.getAttribute("data-src")||el.getAttribute("data-original")||el.getAttribute("data-lazy-src")||el.getAttribute("src")||"";
-      const src=raw?absolute(raw,base):"";
+      const candidate=raw?absolute(raw,base):"";
+      const src=validUrl(candidate)?candidate:"";
       return src?'<img src="'+src.replace(/&/g,"&amp;").replace(/"/g,"&quot;")+'" alt="'+(el.getAttribute("alt")||"").replace(/&/g,"&amp;").replace(/"/g,"&quot;")+'" loading="lazy">':"";
     }
     const allowed=new Set(["p","div","span","br","hr","h1","h2","h3","h4","strong","b","em","i","u","blockquote","pre","code","ul","ol","li","table","thead","tbody","tr","td","th","figure","figcaption"]);
