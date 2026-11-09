@@ -8,7 +8,7 @@ export type NovelSourceExtension = {
 };
 type NovelItem = { title:string; url:string; author:string; description:string; cover:string };
 type ChapterItem = { title:string; url:string };
-type ReadChapter = { title:string; text:string; url:string };
+type ReadChapter = { title:string; text:string; html:string; url:string };
 declare global { interface Window { novelHub?: { fetchPage:(url:string)=>Promise<{ok:boolean;status:number;html:string}> } } }
 
 const emptyForm = {
@@ -113,11 +113,45 @@ function nextCataloguePage(html:string,base:string):string{
   const next=candidates.find(a=>/^(next|older|more|التالي|بعد ذلك|›|»|→)$/i.test(textOf(a)));
   return next?absolute(next.getAttribute("href")||"",base):"";
 }
-function parseChapter(html:string,source:NovelSourceExtension):string{
+function parseChapter(html:string,source:NovelSourceExtension,base:string):{text:string;html:string}{
   const doc=new DOMParser().parseFromString(html,"text/html");
-  const root=selectOne(doc,source.selectors.chapterContent)||doc.querySelector("article")||doc.querySelector("main")||doc.body;
-  root?.querySelectorAll("script,style,nav,header,footer,button,form,iframe").forEach(el=>el.remove());
-  return (root?.textContent||"").replace(/\r/g,"").replace(/[ \t]+\n/g,"\n").replace(/\n{3,}/g,"\n\n").trim();
+  const selectors=[
+    source.selectors.chapterContent,
+    "#chapter-content","#chapter_content",".chapter-content",".chapter__content",
+    ".reading-content",".reader-content",".reader__content",".chapter-body",
+    ".chapter-text",".entry-content",".post-content","[itemprop='articleBody']",
+    "article","main"
+  ].filter(Boolean);
+  const candidates:Element[]=[];
+  selectors.forEach(selector=>selectAll(doc,selector).forEach(el=>{if(!candidates.includes(el))candidates.push(el)}));
+  if(!candidates.includes(doc.body))candidates.push(doc.body);
+  const score=(el:Element)=>{
+    const clone=el.cloneNode(true) as Element;
+    clone.querySelectorAll("script,style,nav,header,footer,button,form,iframe,aside,.ads,.advertisement,[class*=comment i],[class*=social i]").forEach(n=>n.remove());
+    const text=(clone.textContent||"").replace(/\s+/g," ").trim();
+    const paragraphs=clone.querySelectorAll("p").length;
+    const images=clone.querySelectorAll("img").length;
+    return Math.min(text.length,30000)+paragraphs*100+images*1200;
+  };
+  const root=candidates.sort((a,b)=>score(b)-score(a))[0]||doc.body;
+  const clean=(node:Node):string=>{
+    if(node.nodeType===Node.TEXT_NODE)return (node.textContent||"").replace(/\s+/g," ");
+    if(node.nodeType!==Node.ELEMENT_NODE)return "";
+    const el=node as Element;
+    const tag=el.tagName.toLowerCase();
+    if(["script","style","nav","header","footer","button","form","iframe","aside","svg","noscript"].includes(tag))return "";
+    if(tag==="img"){
+      const raw=el.getAttribute("data-src")||el.getAttribute("data-original")||el.getAttribute("data-lazy-src")||el.getAttribute("src")||"";
+      const src=raw?absolute(raw,base):"";
+      return src?'<img src="'+src.replace(/&/g,"&amp;").replace(/"/g,"&quot;")+'" alt="'+(el.getAttribute("alt")||"").replace(/&/g,"&amp;").replace(/"/g,"&quot;")+'" loading="lazy">':"";
+    }
+    const allowed=new Set(["p","div","span","br","hr","h1","h2","h3","h4","strong","b","em","i","u","blockquote","pre","code","ul","ol","li","table","thead","tbody","tr","td","th","figure","figcaption"]);
+    const children=Array.from(el.childNodes).map(clean).join("");
+    return allowed.has(tag)?(tag==="br"||tag==="hr"?"<"+tag+">":"<"+tag+">"+children+"</"+tag+">"):children;
+  };
+  const safeHtml=Array.from(root.childNodes).map(clean).join("");
+  const text=(root.textContent||"").replace(/\r/g,"").replace(/[ \t]+\n/g,"\n").replace(/\n{3,}/g,"\n\n").trim();
+  return {text,html:safeHtml};
 }
 function saveText(filename:string,content:string){
   const blob=new Blob(["\uFEFF"+content],{type:"text/plain;charset=utf-8"});
@@ -171,20 +205,20 @@ export default function ExtensionStudio(){
   };
   const openChapter=async(ch:ChapterItem)=>{
     if(!selected)return;setLoading(true);setError("");
-    try{const html=await fetchHtml(ch.url);const body=parseChapter(html,selected);if(!body)throw new Error("The chapter page was empty. Check the Chapter content selector.");setReading({title:ch.title,text:body,url:ch.url});}
+    try{const html=await fetchHtml(ch.url);const body=parseChapter(html,selected,ch.url);if(body.text.length<40&&!body.html.includes("<img"))throw new Error("The chapter page did not contain readable text or chapter images. This site may load its reader with JavaScript or require a site-specific content selector.");setReading({title:ch.title,text:body.text,html:body.html,url:ch.url});}
     catch(e){setError(e instanceof Error?e.message:"Could not load chapter.");}finally{setLoading(false)}
   };
-  const downloadOne=(ch:ChapterItem)=>{if(!selectedNovel)return;void (async()=>{setBulkProgress("Preparing "+ch.title+"…");try{const html=await fetchHtml(ch.url);const body=parseChapter(html,selected!);saveText((selectedNovel.title+" - "+ch.title).replace(/[\\/:*?"<>|]/g,"-")+".txt",ch.title+"\n\n"+body);setBulkProgress("")}catch(e){setError(e instanceof Error?e.message:"Download failed.");setBulkProgress("")}})()};
+  const downloadOne=(ch:ChapterItem)=>{if(!selectedNovel)return;void (async()=>{setBulkProgress("Preparing "+ch.title+"…");try{const html=await fetchHtml(ch.url);const body=parseChapter(html,selected!,ch.url);saveText((selectedNovel.title+" - "+ch.title).replace(/[\\/:*?"<>|]/g,"-")+".txt",ch.title+"\n\n"+body.text);setBulkProgress("")}catch(e){setError(e instanceof Error?e.message:"Download failed.");setBulkProgress("")}})()};
   const downloadAll=async()=>{
     if(!selectedNovel||!selected||!chapters.length)return;setLoading(true);setError("");const collected:string[]=[];
-    try{for(let i=0;i<chapters.length;i++){setBulkProgress("Downloading "+(i+1)+" / "+chapters.length);const html=await fetchHtml(chapters[i].url);collected.push(chapters[i].title+"\n\n"+parseChapter(html,selected));}saveText((selectedNovel.title).replace(/[\\/:*?"<>|]/g,"-")+".txt",selectedNovel.title+"\n\n"+collected.join("\n\n"+"—".repeat(30)+"\n\n"));setBulkProgress("All chapters downloaded.");}
+    try{for(let i=0;i<chapters.length;i++){setBulkProgress("Downloading "+(i+1)+" / "+chapters.length);const html=await fetchHtml(chapters[i].url);collected.push(chapters[i].title+"\n\n"+parseChapter(html,selected,chapters[i].url).text);}saveText((selectedNovel.title).replace(/[\\/:*?"<>|]/g,"-")+".txt",selectedNovel.title+"\n\n"+collected.join("\n\n"+"—".repeat(30)+"\n\n"));setBulkProgress("All chapters downloaded.");}
     catch(e){setError(e instanceof Error?e.message:"Could not download all chapters.");}finally{setLoading(false)}
   };
   const field=(label:string,key:keyof typeof emptyForm,placeholder:string)=><label className="extension-field"><span>{label}</span><input value={form[key]} onChange={e=>update(key,e.target.value)} placeholder={placeholder}/></label>;
   const visibleNovels=novels.filter(n=>(n.title+" "+n.author+" "+n.description).toLowerCase().includes(search.toLowerCase()));
   return <section className="extension-studio">
     <div className="extension-heading"><div><span className="eyebrow"><Puzzle size={14}/> YOUR NOVEL SOURCES</span><h1>Extensions</h1><p>Add a novel website once, then browse its novels and chapters here.</p></div><div className="extension-heading-icon"><BookOpen size={35}/></div></div>
-    {reading&&selectedNovel?<div className="source-reader"><button className="back-link" onClick={()=>setReading(null)}><ChevronLeft size={16}/> Back to chapters</button><span className="eyebrow">{selected?.name} · {selectedNovel.title}</span><h2>{reading.title}</h2><article className="source-chapter-text">{reading.text}</article><div className="source-reader-actions"><button className="secondary-btn" onClick={()=>saveText((reading.title).replace(/[\\/:*?"<>|]/g,"-")+".txt",reading.title+"\n\n"+reading.text)}><Download size={15}/> Download chapter</button><button className="secondary-btn" onClick={()=>window.open(reading.url,"_blank","noopener,noreferrer")}><ExternalLink size={15}/> Source page</button></div></div>
+    {reading&&selectedNovel?<div className="source-reader"><button className="back-link" onClick={()=>setReading(null)}><ChevronLeft size={16}/> Back to chapters</button><span className="eyebrow">{selected?.name} · {selectedNovel.title}</span><h2>{reading.title}</h2><article className="source-chapter-text" dangerouslySetInnerHTML={{__html:reading.html}} /><div className="source-reader-actions"><button className="secondary-btn" onClick={()=>saveText((reading.title).replace(/[\\/:*?"<>|]/g,"-")+".txt",reading.title+"\n\n"+reading.text)}><Download size={15}/> Download chapter</button><button className="secondary-btn" onClick={()=>window.open(reading.url,"_blank","noopener,noreferrer")}><ExternalLink size={15}/> Source page</button></div></div>
     : selectedNovel ? <div className="source-browser"><button className="back-link" onClick={()=>{setSelectedNovel(null);setChapters([]);setError("")}}><ChevronLeft size={16}/> Back to {selected?.name}</button><div className="source-browser-heading"><div><span className="eyebrow">{selected?.name} · NOVEL DETAILS</span><h2>{selectedNovel.title}</h2><p>{selectedNovel.author&&"by "+selectedNovel.author}{selectedNovel.description&&" · "+selectedNovel.description}</p></div><button className="secondary-btn small" onClick={()=>downloadAll()} disabled={!chapters.length||loading}><Download size={15}/> Download all chapters</button></div><div className="source-list-heading"><strong>Chapters ({chapters.length})</strong><span>Choose a chapter to read or download</span></div>{chapters.map((ch,i)=><div className="source-chapter-row" key={ch.url+i}><button className="source-chapter-open" onClick={()=>void openChapter(ch)}><BookOpen size={16}/><span>{i+1}. {ch.title}</span></button><button className="icon-btn" title="Download chapter" onClick={()=>downloadOne(ch)}><Download size={16}/></button></div>)}</div>
     : selected ? <div className="source-browser"><div className="source-browser-heading"><div><span className="eyebrow">{selected.language} SOURCE</span><h2>{selected.icon} {selected.name}</h2><p>{selected.description||selected.baseUrl}</p></div><div className="source-heading-actions"><button className="secondary-btn small" onClick={()=>void loadNovels(selected)} disabled={loading}><RefreshCw size={15}/> Refresh</button><button className="icon-btn" title="Close source" onClick={()=>{setSelected(null);setNovels([]);setError("")}}><X size={17}/></button></div></div><div className="source-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Filter loaded novels…"/><span>{visibleNovels.length} novels</span></div>{loading&&<div className="source-loading"><Loader2 size={22}/> Loading source…</div>}{error&&<div className="source-error">{error}</div>}<div className="source-novel-grid">{visibleNovels.map((n,i)=><button className="source-novel-poster" key={n.url+i} onClick={()=>void openNovel(n)} title={n.title} aria-label={"Open chapters for "+n.title}>{n.cover?<img src={n.cover} alt={n.title} loading="lazy"/>:<span className="source-poster-placeholder"><BookOpen size={28}/></span>}<span>{n.title}</span></button>)}</div></div>
     : <><div className="installed-extensions"><div className="section-heading"><div><span className="eyebrow">READY TO READ</span><h2>My sources</h2></div><span className="result-count">{sources.length} INSTALLED</span></div>{sources.length===0?<div className="extension-empty"><Puzzle size={25}/><strong>No sources installed yet</strong><span>Add a novel website below. Novel Hub will display its novels and chapters here.</span></div>:<div className="extension-list">{sources.map(source=><article className="extension-card" key={source.id}><div className="extension-icon">{source.icon}</div><div className="extension-card-info"><strong>{source.name}</strong><span>{source.language} · v{source.version}</span><small>{source.baseUrl}</small></div><div className="extension-card-actions"><button className="primary-btn small" onClick={()=>void loadNovels(source)}><BookOpen size={15}/> Browse novels</button><button className="icon-btn" title="Export source" onClick={()=>downloadManifest(source)}><Download size={16}/></button><button className="icon-btn danger" title="Remove source" onClick={()=>persist(sources.filter(s=>s.id!==source.id))}><Trash2 size={16}/></button></div></article>)}</div>}</div>
